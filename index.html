@@ -900,6 +900,7 @@
             try {
                 await speakWithGoogleVoice(testText, voiceId);
             } catch (error) {
+                alert('Test failed: ' + error.message);
                 showError('googleErrorBox', 'googleErrorMessage', error.message);
             }
         }
@@ -985,6 +986,7 @@
                 await speakWithGoogleVoice(testText, voiceId);
                 showSuccess('googleSuccessBox');
             } catch (error) {
+                alert('Test failed: ' + error.message);
                 showError('googleErrorBox', 'googleErrorMessage', error.message);
             }
         }
@@ -1059,6 +1061,7 @@
         }
 
         async function speakWithGoogleVoice(text, voiceId) {
+            console.log('speakWithGoogleVoice called with:', text, voiceId);
             showStatus('🔊 Speaking...', 'speaking');
 
             const response = await fetch('/api/speak', {
@@ -1072,27 +1075,39 @@
                 })
             });
 
+            console.log('API response status:', response.status);
+
             if (!response.ok) {
                 const error = await response.json();
+                console.error('API error:', error);
                 throw new Error(error.error || 'TTS failed');
             }
 
             const data = await response.json();
+            console.log('Got audio data, length:', data.audioContent?.length);
             const audioContent = data.audioContent;
             
             // Play audio
             const audio = new Audio('data:audio/mp3;base64,' + audioContent);
+            console.log('Created audio element, attempting to play');
             
             return new Promise((resolve, reject) => {
                 audio.onended = () => {
+                    console.log('Audio ended');
                     hideStatus();
                     resolve();
                 };
-                audio.onerror = () => {
+                audio.onerror = (e) => {
+                    console.error('Audio playback error:', e);
                     hideStatus();
                     reject(new Error('Audio playback failed'));
                 };
-                audio.play();
+                audio.play().then(() => {
+                    console.log('Audio started playing');
+                }).catch(err => {
+                    console.error('audio.play() failed:', err);
+                    reject(err);
+                });
             });
         }
 
@@ -1164,6 +1179,8 @@
             }
         }
 
+        let audioContext = null;
+
         function startListening() {
             if (!recognition) {
                 alert('Speech recognition not supported in this browser');
@@ -1172,6 +1189,18 @@
 
             if (!isListening) {
                 isListening = true;
+                
+                // Create audio context with user gesture to bypass autoplay policy
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    // Play silent sound to "unlock" audio
+                    const buffer = audioContext.createBuffer(1, 1, 22050);
+                    const source = audioContext.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioContext.destination);
+                    source.start();
+                }
+                
                 recognition.start();
                 document.getElementById('listenBtn').textContent = '⏸️ STOP VOICE MODE';
             } else {
