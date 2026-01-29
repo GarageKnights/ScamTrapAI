@@ -946,6 +946,1414 @@ Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="
 
         async function testSpecificPersonaVoice(selectId, personaName) {
             const voiceId = document.getElementById(selectId).value;
+            const testText = `<speak>Hello, this is ${personaName}. This is how I'll sound when talking to scammers.</speak>`;
+            
+            try {
+                await speakWithGoogleVoice(testText, voiceId);
+            } catch (error) {
+                alert('Test failed: ' + error.message);
+                showError('googleErrorBox', 'googleErrorMessage', error.message);
+            }
+        }
+
+        function initVoices() {
+            iosVoices = synth.getVoices();
+            
+            if (iosVoices.length === 0) {
+                synth.onvoiceschanged = () => {
+                    iosVoices = synth.getVoices();
+                    populateIOSVoices();
+                };
+            } else {
+                populateIOSVoices();
+            }
+        }
+
+        function populateIOSVoices() {
+            const select = document.getElementById('iosVoiceSelect');
+            select.innerHTML = '';
+            
+            iosVoices.forEach((voice, i) => {
+                if (voice.lang.startsWith('en')) {
+                    const option = document.createElement('option');
+                    option.value = i;
+                    option.textContent = `${voice.name} (${voice.lang})`;
+                    select.appendChild(option);
+                }
+            });
+        }
+
+        function initSpeechRecognition() {
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+
+                recognition.onresult = (event) => {
+                    const transcript = event.results[event.results.length - 1][0].transcript;
+                    document.getElementById('scammerInput').value = transcript;
+                    processScammerMessage();
+                };
+
+                recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                };
+            }
+        }
+
+        function selectVoiceSystem(system) {
+            voiceSystem = system;
+            localStorage.setItem('scamtrap_voice_system', system);
+            
+            // Update UI
+            document.querySelectorAll('.voice-option').forEach(opt => {
+                opt.classList.remove('selected');
+            });
+            document.querySelector(`[data-voice="${system}"]`).classList.add('selected');
+            
+            // Show/hide sections
+            document.getElementById('iosVoiceSection').classList.remove('show');
+            document.getElementById('googleVoiceSection').classList.remove('show');
+            
+            if (system === 'ios') {
+                document.getElementById('iosVoiceSection').classList.add('show');
+            } else {
+                document.getElementById('googleVoiceSection').classList.add('show');
+            }
+        }
+
+        async function testIOSVoice() {
+            const testText = "Hello! This is a test of the iOS voice system. I'm a confused elderly grandpa who's terrible with technology.";
+            await speakWithIOS(testText);
+        }
+
+        async function testGoogleVoice() {
+            const testText = "<speak>Hello! This is a test of the Google Cloud voice system. I'm a confused elderly grandpa who's terrible with technology.</speak>";
+            const voiceId = document.getElementById('googleVoiceType').value;
+            
+            try {
+                await speakWithGoogleVoice(testText, voiceId);
+                showSuccess('googleSuccessBox');
+            } catch (error) {
+                alert('Test failed: ' + error.message);
+                showError('googleErrorBox', 'googleErrorMessage', error.message);
+            }
+        }
+
+        async function generateAIResponse(scammerMessage, persona) {
+            const systemPrompt = personaPrompts[persona];
+            
+            const contextMessages = conversationHistory.slice(-6).map(msg => ({
+                role: msg.sender === 'scammer' ? 'user' : 'assistant',
+                content: msg.text
+            }));
+
+            contextMessages.push({
+                role: 'user',
+                content: scammerMessage
+            });
+
+            const response = await fetch('/api/generate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    systemPrompt: systemPrompt,
+                    messages: contextMessages
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'API request failed');
+            }
+
+            const data = await response.json();
+            return data.response;
+        }
+
+        async function speakWithIOS(text) {
+            return new Promise((resolve) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                
+                const voiceIndex = document.getElementById('iosVoiceSelect').value;
+                if (voiceIndex && iosVoices[voiceIndex]) {
+                    utterance.voice = iosVoices[voiceIndex];
+                }
+                
+                // Adjust based on persona
+                if (currentPersona === 'confused-grandpa') {
+                    utterance.rate = 0.8;
+                    utterance.pitch = 0.9;
+                } else if (currentPersona === 'paranoid-karen') {
+                    utterance.rate = 1.1;
+                    utterance.pitch = 1.2;
+                } else if (currentPersona === 'drunk-dave') {
+                    utterance.rate = 0.7;
+                    utterance.pitch = 0.95;
+                }
+
+                utterance.onend = () => {
+                    hideStatus();
+                    resolve();
+                };
+
+                synth.speak(utterance);
+            });
+        }
+
+        async function speakWithGoogle(text) {
+            // Get the voice for the current persona
+            const voiceId = personaVoiceMap[currentPersona] || googleVoiceType;
+            
+            // Sanitize: remove stage directions like *chuckles*, *sighs*, etc.
+            let sanitized = text.replace(/\*[^*]+\*/g, '');
+            
+            // Remove any non-SSML content before/after <speak> tags
+            if (sanitized.includes('<speak>')) {
+                const speakMatch = sanitized.match(/<speak>[\s\S]*?<\/speak>/);
+                if (speakMatch) {
+                    sanitized = speakMatch[0];
+                }
+            } else {
+                // If no SSML tags, wrap plain text in <speak> tags
+                sanitized = `<speak>${sanitized.trim()}</speak>`;
+            }
+            
+            // Validate: ensure no unclosed tags or invalid SSML
+            // Remove any text outside <speak> tags
+            sanitized = sanitized.replace(/^[^<]*<speak>/, '<speak>');
+            sanitized = sanitized.replace(/<\/speak>[^>]*$/, '</speak>');
+            
+            // Fix common SSML errors
+            sanitized = sanitized.replace(/<\/prosody>/g, '</prosody>');
+            sanitized = sanitized.replace(/<prosody([^>]*)><\/prosody>/g, ''); // Remove empty prosody tags
+            
+            return await speakWithGoogleVoice(sanitized, voiceId);
+        }
+
+        async function speakWithGoogleVoice(text, voiceId) {
+            console.log('speakWithGoogleVoice called with:', text, voiceId);
+            showStatus('🔊 Speaking...', 'speaking');
+
+            const response = await fetch('/api/speak', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    text: text,
+                    voiceId: voiceId,
+                    useSSML: true
+                })
+            });
+
+            console.log('API response status:', response.status);
+
+            // If SSML fails, try again with plain text
+            if (!response.ok) {
+                const error = await response.json();
+                console.error('SSML API error:', error);
+                
+                if (error.error && error.error.includes('SSML')) {
+                    console.log('SSML invalid, retrying with plain text');
+                    // Strip all SSML tags and try again
+                    const plainText = text.replace(/<[^>]+>/g, '').trim();
+                    
+                    const retryResponse = await fetch('/api/speak', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: plainText,
+                            voiceId: voiceId,
+                            useSSML: false
+                        })
+                    });
+                    
+                    if (!retryResponse.ok) {
+                        const retryError = await retryResponse.json();
+                        throw new Error(retryError.error || 'TTS failed');
+                    }
+                    
+                    const retryData = await retryResponse.json();
+                    return await playAudio(retryData.audioContent);
+                }
+                
+                throw new Error(error.error || 'TTS failed');
+            }
+
+            const data = await response.json();
+            console.log('Got audio data, length:', data.audioContent?.length);
+            return await playAudio(data.audioContent);
+        }
+        
+        async function playAudio(audioContent) {
+            // Decode base64 to array buffer
+            const binaryString = atob(audioContent);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            
+            // Use Web Audio API
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            return new Promise((resolve, reject) => {
+                audioContext.decodeAudioData(bytes.buffer, (audioBuffer) => {
+                    const source = audioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(audioContext.destination);
+                    
+                    source.onended = () => {
+                        console.log('Audio ended');
+                        hideStatus();
+                        resolve();
+                    };
+                    
+                    console.log('Starting audio playback via Web Audio API');
+                    source.start(0);
+                }, (error) => {
+                    console.error('Audio decode error:', error);
+                    hideStatus();
+                    reject(new Error('Failed to decode audio'));
+                });
+            });
+        }
+
+        function startApp() {
+            document.getElementById('setupScreen').style.display = 'none';
+            document.getElementById('callScreen').classList.add('active');
+            document.getElementById('activeVoiceSystem').textContent = 
+                voiceSystem === 'ios' ? 'iOS Voices' : 'Google Cloud TTS';
+            
+            callStartTime = Date.now();
+            startTimer();
+        }
+
+        // Persona selection
+        document.querySelectorAll('.persona-card').forEach(card => {
+            card.addEventListener('click', () => {
+                document.querySelectorAll('.persona-card').forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+                currentPersona = card.dataset.persona;
+            });
+        });
+
+        async function processScammerMessage() {
+            const scammerMessage = document.getElementById('scammerInput').value.trim();
+            
+            if (!scammerMessage) return;
+
+            addToTranscript('scammer', scammerMessage);
+            conversationHistory.push({ sender: 'scammer', text: scammerMessage });
+            
+            document.getElementById('scammerInput').value = '';
+
+            showStatus('🧠 AI is thinking...', 'thinking');
+
+            try {
+                const botResponse = await generateAIResponse(scammerMessage, currentPersona);
+                
+                addToTranscript('bot', botResponse);
+                conversationHistory.push({ sender: 'bot', text: botResponse });
+                
+                exchangeCount++;
+                updateStats();
+
+                // Stop speech recognition before speaking
+                const wasListening = isListening;
+                if (isListening && recognition) {
+                    recognition.stop();
+                    isListening = false;
+                }
+
+                showStatus('🔊 Speaking...', 'speaking');
+                
+                if (voiceSystem === 'ios') {
+                    await speakWithIOS(botResponse);
+                } else {
+                    await speakWithGoogle(botResponse);
+                }
+                
+                // Restart speech recognition after speaking
+                if (wasListening && recognition) {
+                    recognition.start();
+                    isListening = true;
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error: ' + error.message);
+                hideStatus();
+            }
+        }
+
+        let audioContext = null;
+
+        function startListening() {
+            if (!recognition) {
+                alert('Speech recognition not supported in this browser');
+                return;
+            }
+
+            if (!isListening) {
+                isListening = true;
+                
+                // Create audio context with user gesture to bypass autoplay policy
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    // Play silent sound to "unlock" audio
+                    const buffer = audioContext.createBuffer(1, 1, 22050);
+                    const source = audioContext.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioContext.destination);
+                    source.start();
+                }
+                
+                recognition.start();
+                document.getElementById('listenBtn').textContent = '⏸️ STOP VOICE MODE';
+            } else {
+                isListening = false;
+                recognition.stop();
+                document.getElementById('listenBtn').textContent = '🎤 START VOICE MODE';
+            }
+        }
+
+        function addToTranscript(sender, text) {
+            const transcript = document.getElementById('transcript');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `transcript-message ${sender}`;
+            
+            let label = sender === 'scammer' ? 'SCAMMER' : 'BOT';
+            
+            messageDiv.innerHTML = `
+                <div class="message-label">${label}</div>
+                <div>${text}</div>
+            `;
+            
+            transcript.appendChild(messageDiv);
+            transcript.scrollTop = transcript.scrollHeight;
+        }
+
+        function updateStats() {
+            document.getElementById('exchangeCount').textContent = exchangeCount;
+            
+            const rageEmojis = ['😐', '😑', '😒', '😠', '😡', '🤬', '💀'];
+            const rageIndex = Math.min(Math.floor(exchangeCount / 3), rageEmojis.length - 1);
+            document.getElementById('rageLevel').textContent = rageEmojis[rageIndex];
+        }
+
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - callStartTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                document.getElementById('callDuration').textContent = 
+                    `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            }, 1000);
+        }
+
+        function showStatus(message, type) {
+            const indicator = document.getElementById('statusIndicator');
+            indicator.textContent = message;
+            indicator.className = `status-indicator status-${type} show`;
+        }
+
+        function hideStatus() {
+            document.getElementById('statusIndicator').classList.remove('show');
+        }
+
+        function showSuccess(boxId) {
+            const box = document.getElementById(boxId);
+            box.classList.add('show');
+            setTimeout(() => box.classList.remove('show'), 3000);
+        }
+
+        function showError(boxId, messageId, message) {
+            const box = document.getElementById(boxId);
+            document.getElementById(messageId).textContent = message;
+            box.classList.add('show');
+            setTimeout(() => box.classList.remove('show'), 5000);
+        }
+
+        function endCall() {
+            if (recognition && isListening) {
+                recognition.stop();
+            }
+            
+            if (timerInterval) {
+                clearInterval(timerInterval);
+            }
+            
+            synth.cancel();
+            
+            alert(`Call ended!\nDuration: ${document.getElementById('callDuration').textContent}\nExchanges: ${exchangeCount}\n\nTime successfully wasted! 🎉`);
+            
+            location.reload();
+        }
+
+        document.getElementById('scammerInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                processScammerMessage();
+            }
+        });
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScamTrap AI - Waste Scammers' Time</title>
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #151b2e;
+            --bg-terminal: #0d1117;
+            --accent-green: #00ff88;
+            --accent-red: #ff3366;
+            --accent-yellow: #ffcc00;
+            --accent-blue: #00ccff;
+            --accent-purple: #a855f7;
+            --text-primary: #e6e6e6;
+            --text-muted: #8b92a8;
+            --border: #1f2937;
+        }
+
+        body {
+            font-family: 'Space Mono', monospace;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 0;
+            margin: 0;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            padding: 30px 20px;
+            border-bottom: 2px solid var(--border);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, 
+                transparent, 
+                var(--accent-purple) 20%, 
+                var(--accent-blue) 50%, 
+                var(--accent-green) 80%, 
+                transparent);
+            animation: scan 3s linear infinite;
+        }
+
+        @keyframes scan {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        h1 {
+            font-family: 'Courier Prime', monospace;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-green);
+            text-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .badge {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-green));
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            margin-top: 15px;
+            letter-spacing: 1px;
+        }
+
+        .setup-section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+
+        .setup-section h2 {
+            color: var(--accent-yellow);
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+        }
+
+        .info-box {
+            background: rgba(168, 85, 247, 0.1);
+            border: 1px solid var(--accent-purple);
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+
+        .info-box strong {
+            color: var(--accent-purple);
+        }
+
+        .info-box a {
+            color: var(--accent-green);
+            text-decoration: none;
+        }
+
+        .info-box code {
+            background: var(--bg-terminal);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.8rem;
+        }
+
+        .voice-option {
+            background: var(--bg-terminal);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 15px 0;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .voice-option:hover {
+            border-color: var(--accent-purple);
+        }
+
+        .voice-option.selected {
+            border-color: var(--accent-green);
+            background: rgba(0, 255, 136, 0.05);
+        }
+
+        .voice-option h3 {
+            color: var(--accent-green);
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+
+        .voice-option .description {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        .voice-option .pros {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: var(--accent-green);
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            background: var(--bg-terminal);
+            border: 1px solid var(--border);
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-family: 'Space Mono', monospace;
+            font-size: 0.9rem;
+            border-radius: 6px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, select:focus {
+            border-color: var(--accent-purple);
+        }
+
+        .button {
+            width: 100%;
+            padding: 15px;
+            font-size: 1rem;
+            font-weight: 700;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Space Mono', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s;
+            margin: 10px 0;
+        }
+
+        .button:active {
+            transform: scale(0.98);
+        }
+
+        .button-primary {
+            background: var(--accent-green);
+            color: var(--bg-primary);
+            box-shadow: 0 5px 20px rgba(0, 255, 136, 0.3);
+        }
+
+        .button-secondary {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .button-test {
+            background: var(--accent-yellow);
+            color: var(--bg-primary);
+        }
+
+        .success-box, .error-box {
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+            display: none;
+        }
+
+        .success-box {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid var(--accent-green);
+        }
+
+        .error-box {
+            background: rgba(255, 51, 102, 0.1);
+            border: 1px solid var(--accent-red);
+        }
+
+        .success-box.show, .error-box.show {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .collapsible-section {
+            display: none;
+            animation: expandDown 0.3s ease;
+        }
+
+        .collapsible-section.show {
+            display: block;
+        }
+
+        @keyframes expandDown {
+            from { opacity: 0; max-height: 0; }
+            to { opacity: 1; max-height: 500px; }
+        }
+
+        .persona-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .persona-card {
+            background: var(--bg-terminal);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .persona-card:active {
+            transform: scale(0.95);
+        }
+
+        .persona-card.selected {
+            border-color: var(--accent-purple);
+            background: rgba(168, 85, 247, 0.1);
+            box-shadow: 0 0 20px rgba(168, 85, 247, 0.2);
+        }
+
+        .persona-card .emoji {
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
+
+        .persona-card .name {
+            font-weight: 700;
+            color: var(--accent-green);
+            font-size: 0.9rem;
+        }
+
+        .call-screen {
+            display: none;
+        }
+
+        .call-screen.active {
+            display: block;
+        }
+
+        .transcript {
+            background: var(--bg-terminal);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 350px;
+            max-height: 450px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+
+        .transcript::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .transcript::-webkit-scrollbar-track {
+            background: var(--bg-terminal);
+        }
+
+        .transcript::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        .transcript-message {
+            margin-bottom: 15px;
+            padding: 12px;
+            border-radius: 6px;
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .transcript-message.scammer {
+            background: rgba(255, 51, 102, 0.1);
+            border-left: 3px solid var(--accent-red);
+        }
+
+        .transcript-message.bot {
+            background: rgba(168, 85, 247, 0.1);
+            border-left: 3px solid var(--accent-purple);
+        }
+
+        .transcript-message.system {
+            background: rgba(0, 204, 255, 0.1);
+            border-left: 3px solid var(--accent-blue);
+        }
+
+        .message-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            font-weight: 700;
+        }
+
+        .status-indicator {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+            text-align: center;
+            font-weight: 700;
+            display: none;
+        }
+
+        .status-indicator.show {
+            display: block;
+        }
+
+        .status-thinking {
+            border-color: var(--accent-purple);
+            color: var(--accent-purple);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        .status-speaking {
+            border-color: var(--accent-green);
+            color: var(--accent-green);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-purple);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .input-row input {
+            flex: 1;
+        }
+
+        .input-row button {
+            width: auto;
+            padding: 12px 25px;
+            margin: 0;
+        }
+
+        .voice-badge {
+            display: inline-block;
+            background: var(--accent-blue);
+            color: var(--bg-primary);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Setup Screen -->
+        <div id="setupScreen">
+            <div class="header">
+                <h1>🪤 SCAMTRAP AI</h1>
+                <p class="subtitle">Waste Their Time, Not Yours</p>
+                <div class="badge">🧠 AI + VOICE OPTIONS</div>
+            </div>
+
+            <div class="setup-section">
+                <h2>🔊 Voice System</h2>
+                
+                <div class="info-box">
+                    <strong>Choose your voice engine:</strong> Built-in iOS voices (free, works now) or Google Cloud (realistic, $300 free credit)
+                </div>
+
+                <div class="voice-option selected" data-voice="ios" onclick="selectVoiceSystem('ios')">
+                    <h3>📱 Built-in iOS Voices <span class="voice-badge">FREE</span></h3>
+                    <div class="description">
+                        Uses your iPhone's built-in text-to-speech. Works immediately with no setup required.
+                    </div>
+                    <div class="pros">
+                        ✅ Free forever • ✅ Works offline • ✅ No API needed • ✅ Ready now
+                    </div>
+                </div>
+
+                <div class="voice-option" data-voice="google" onclick="selectVoiceSystem('google')">
+                    <h3>☁️ Google Cloud TTS <span class="voice-badge">$300 FREE</span></h3>
+                    <div class="description">
+                        Ultra-realistic WaveNet voices from Google Cloud. Requires API key but includes $300 free credit.
+                    </div>
+                    <div class="pros">
+                        ✅ Very realistic • ✅ $300 free credit • ✅ Professional quality • ✅ Many voices
+                    </div>
+                </div>
+
+                <div class="collapsible-section" id="iosVoiceSection">
+                    <div class="info-box">
+                        <strong>📱 iOS Voice Setup:</strong><br><br>
+                        1. Go to Settings → Accessibility → Spoken Content → Voices<br>
+                        2. Tap "English"<br>
+                        3. Download "Enhanced Quality" voices:<br>
+                        <code>Samantha (US Female)</code> or <code>Alex (US Male)</code><br><br>
+                        That's it! The app will use these automatically.
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label">Select iOS Voice</label>
+                        <select id="iosVoiceSelect">
+                            <option value="">Loading voices...</option>
+                        </select>
+                    </div>
+
+                    <button class="button button-test" onclick="testIOSVoice()">
+                        🎵 TEST IOS VOICE
+                    </button>
+                </div>
+
+                <div class="collapsible-section" id="googleVoiceSection">
+                    <div class="info-box">
+                        <strong>☁️ Google Cloud TTS:</strong> Using premium voices via backend API.
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label">Voice Type</label>
+                        <select id="googleVoiceType">
+                            <optgroup label="🌟 NEURAL2 VOICES (BEST QUALITY)">
+                                <option value="en-US-Neural2-A">🇺🇸 Male - Warm & Clear (A)</option>
+                                <option value="en-US-Neural2-D">🇺🇸 Male - Deep & Authoritative (D)</option>
+                                <option value="en-US-Neural2-I">🇺🇸 Male - Young & Energetic (I)</option>
+                                <option value="en-US-Neural2-J">🇺🇸 Male - Casual & Friendly (J)</option>
+                                <option value="en-US-Neural2-C">🇺🇸 Female - Professional (C)</option>
+                                <option value="en-US-Neural2-E">🇺🇸 Female - Expressive (E)</option>
+                                <option value="en-US-Neural2-F">🇺🇸 Female - Warm (F)</option>
+                                <option value="en-US-Neural2-G">🇺🇸 Female - Young (G)</option>
+                                <option value="en-US-Neural2-H">🇺🇸 Female - Confident (H)</option>
+                            </optgroup>
+                            <optgroup label="🎭 STUDIO VOICES (PREMIUM)">
+                                <option value="en-US-Studio-O">🇺🇸 Male - Rich & Mature (Studio-O)</option>
+                                <option value="en-US-Studio-Q">🇺🇸 Male - Deep & Resonant (Studio-Q)</option>
+                                <option value="en-US-Studio-M">🇺🇸 Female - Warm & Natural (Studio-M)</option>
+                            </optgroup>
+                            <optgroup label="🌊 WAVENET VOICES (HIGH QUALITY)">
+                                <option value="en-US-Wavenet-A">🇺🇸 Male - Clear (WaveNet-A)</option>
+                                <option value="en-US-Wavenet-B">🇺🇸 Male - Deep (WaveNet-B)</option>
+                                <option value="en-US-Wavenet-D">🇺🇸 Male - Authoritative (WaveNet-D)</option>
+                                <option value="en-US-Wavenet-I">🇺🇸 Male - Conversational (WaveNet-I)</option>
+                                <option value="en-US-Wavenet-J">🇺🇸 Male - Casual (WaveNet-J)</option>
+                                <option value="en-US-Wavenet-C">🇺🇸 Female - Professional (WaveNet-C)</option>
+                                <option value="en-US-Wavenet-E">🇺🇸 Female - Warm (WaveNet-E)</option>
+                                <option value="en-US-Wavenet-F">🇺🇸 Female - Friendly (WaveNet-F)</option>
+                                <option value="en-US-Wavenet-G">🇺🇸 Female - Expressive (WaveNet-G)</option>
+                                <option value="en-US-Wavenet-H">🇺🇸 Female - Clear (WaveNet-H)</option>
+                            </optgroup>
+                            <optgroup label="🇬🇧 BRITISH ENGLISH">
+                                <option value="en-GB-Neural2-A">🇬🇧 Male - Southern English (Neural2-A)</option>
+                                <option value="en-GB-Neural2-B">🇬🇧 Male - Refined (Neural2-B)</option>
+                                <option value="en-GB-Neural2-C">🇬🇧 Female - Posh (Neural2-C)</option>
+                                <option value="en-GB-Neural2-D">🇬🇧 Male - BBC Style (Neural2-D)</option>
+                                <option value="en-GB-Neural2-F">🇬🇧 Female - Professional (Neural2-F)</option>
+                                <option value="en-GB-Wavenet-A">🇬🇧 Male - Clear (WaveNet-A)</option>
+                                <option value="en-GB-Wavenet-B">🇬🇧 Male - Authoritative (WaveNet-B)</option>
+                                <option value="en-GB-Wavenet-C">🇬🇧 Female - Refined (WaveNet-C)</option>
+                                <option value="en-GB-Wavenet-D">🇬🇧 Male - Professional (WaveNet-D)</option>
+                                <option value="en-GB-Wavenet-F">🇬🇧 Female - Elegant (WaveNet-F)</option>
+                            </optgroup>
+                            <optgroup label="🇦🇺 AUSTRALIAN ENGLISH">
+                                <option value="en-AU-Neural2-A">🇦🇺 Female - Australian (Neural2-A)</option>
+                                <option value="en-AU-Neural2-B">🇦🇺 Male - Australian (Neural2-B)</option>
+                                <option value="en-AU-Neural2-C">🇦🇺 Female - Friendly (Neural2-C)</option>
+                                <option value="en-AU-Neural2-D">🇦🇺 Male - Casual (Neural2-D)</option>
+                                <option value="en-AU-Wavenet-A">🇦🇺 Female - Clear (WaveNet-A)</option>
+                                <option value="en-AU-Wavenet-B">🇦🇺 Male - Casual (WaveNet-B)</option>
+                                <option value="en-AU-Wavenet-C">🇦🇺 Female - Warm (WaveNet-C)</option>
+                                <option value="en-AU-Wavenet-D">🇦🇺 Male - Friendly (WaveNet-D)</option>
+                            </optgroup>
+                            <optgroup label="🇮🇳 INDIAN ENGLISH">
+                                <option value="en-IN-Neural2-A">🇮🇳 Female - Standard (Neural2-A)</option>
+                                <option value="en-IN-Neural2-B">🇮🇳 Male - Standard (Neural2-B)</option>
+                                <option value="en-IN-Neural2-C">🇮🇳 Male - Clear (Neural2-C)</option>
+                                <option value="en-IN-Neural2-D">🇮🇳 Female - Professional (Neural2-D)</option>
+                                <option value="en-IN-Wavenet-A">🇮🇳 Female - Clear (WaveNet-A)</option>
+                                <option value="en-IN-Wavenet-B">🇮🇳 Male - Professional (WaveNet-B)</option>
+                                <option value="en-IN-Wavenet-C">🇨🇳 Male - Standard (WaveNet-C)</option>
+                                <option value="en-IN-Wavenet-D">🇮🇳 Female - Warm (WaveNet-D)</option>
+                            </optgroup>
+                            <optgroup label="📱 STANDARD VOICES (BASIC)">
+                                <option value="en-US-Standard-A">🇺🇸 Male - Basic (Standard-A)</option>
+                                <option value="en-US-Standard-B">🇺🇸 Male - Basic (Standard-B)</option>
+                                <option value="en-US-Standard-C">🇺🇸 Female - Basic (Standard-C)</option>
+                                <option value="en-US-Standard-D">🇺🇸 Male - Basic (Standard-D)</option>
+                                <option value="en-US-Standard-E">🇺🇸 Female - Basic (Standard-E)</option>
+                            </optgroup>
+                        </select>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 Voice Recommendations:</strong><br><br>
+                        <strong>Confused Grandpa:</strong> Neural2-D (deep male) or Neural2-A (warm male)<br>
+                        <strong>Paranoid Karen:</strong> Neural2-H (confident female) or Neural2-C (professional female)<br>
+                        <strong>Drunk Dave:</strong> Neural2-J (casual male) or WaveNet-I (conversational male)<br>
+                        <strong>Foreign Investor:</strong> en-IN-Neural2-B (Indian male) or en-GB-Neural2-A (British male)<br>
+                        <strong>Wannabe Hacker:</strong> Neural2-I (young male) or Neural2-J (casual male)<br>
+                        <strong>Chatty Housewife:</strong> Neural2-F (warm female) or Neural2-G (young female)
+                    </div>
+
+                    <button class="button button-secondary" onclick="toggleVoiceMapping()">
+                        🎭 ASSIGN VOICES TO PERSONAS
+                    </button>
+
+                    <div class="collapsible-section" id="voiceMappingSection">
+                        <div class="info-box">
+                            <strong>🎯 Assign Custom Voices:</strong><br>
+                            Set different Google Cloud voices for each persona. When you select a persona during the call, it will automatically use the voice you assigned here.
+                        </div>
+
+                        <div style="background: var(--bg-terminal); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 15px 0;">
+                            <div class="input-group">
+                                <label class="input-label">👴 Confused Grandpa Voice</label>
+                                <select id="voiceGrandpa" class="persona-voice-select">
+                                    <!-- Will be populated with same options -->
+                                </select>
+                                <button class="button button-test" onclick="testSpecificPersonaVoice('voiceGrandpa', 'Confused Grandpa')" style="margin-top: 10px; font-size: 0.85rem; padding: 8px;">
+                                    🎵 TEST THIS VOICE
+                                </button>
+                            </div>
+
+                            <div class="input-group">
+                                <label class="input-label">🔍 Paranoid Karen Voice</label>
+                                <select id="voiceKaren" class="persona-voice-select">
+                                </select>
+                                <button class="button button-test" onclick="testSpecificPersonaVoice('voiceKaren', 'Paranoid Karen')" style="margin-top: 10px; font-size: 0.85rem; padding: 8px;">
+                                    🎵 TEST THIS VOICE
+                                </button>
+                            </div>
+
+                            <div class="input-group">
+                                <label class="input-label">🍺 Drunk Dave Voice</label>
+                                <select id="voiceDave" class="persona-voice-select">
+                                </select>
+                                <button class="button button-test" onclick="testSpecificPersonaVoice('voiceDave', 'Drunk Dave')" style="margin-top: 10px; font-size: 0.85rem; padding: 8px;">
+                                    🎵 TEST THIS VOICE
+                                </button>
+                            </div>
+
+                            <div class="input-group">
+                                <label class="input-label">💰 Foreign Investor Voice</label>
+                                <select id="voiceInvestor" class="persona-voice-select">
+                                </select>
+                                <button class="button button-test" onclick="testSpecificPersonaVoice('voiceInvestor', 'Foreign Investor')" style="margin-top: 10px; font-size: 0.85rem; padding: 8px;">
+                                    🎵 TEST THIS VOICE
+                                </button>
+                            </div>
+
+                            <div class="input-group">
+                                <label class="input-label">💻 Wannabe Hacker Voice</label>
+                                <select id="voiceHacker" class="persona-voice-select">
+                                </select>
+                                <button class="button button-test" onclick="testSpecificPersonaVoice('voiceHacker', 'Wannabe Hacker')" style="margin-top: 10px; font-size: 0.85rem; padding: 8px;">
+                                    🎵 TEST THIS VOICE
+                                </button>
+                            </div>
+
+                            <div class="input-group">
+                                <label class="input-label">☕ Chatty Housewife Voice</label>
+                                <select id="voiceHousewife" class="persona-voice-select">
+                                </select>
+                                <button class="button button-test" onclick="testSpecificPersonaVoice('voiceHousewife', 'Chatty Housewife')" style="margin-top: 10px; font-size: 0.85rem; padding: 8px;">
+                                    🎵 TEST THIS VOICE
+                                </button>
+                            </div>
+                        </div>
+
+                        <button class="button button-primary" onclick="saveVoiceMapping()">
+                            💾 SAVE VOICE ASSIGNMENTS
+                        </button>
+
+                        <div class="success-box" id="voiceMappingSuccessBox">
+                            ✅ Voice assignments saved!
+                        </div>
+                    </div>
+
+                    <button class="button button-primary" onclick="saveGoogleConfig()">
+                        💾 SAVE GOOGLE CONFIG
+                    </button>
+
+                    <button class="button button-test" onclick="testGoogleVoice()">
+                        🎵 TEST GOOGLE VOICE
+                    </button>
+
+                    <div class="success-box" id="googleSuccessBox">
+                        ✅ Google Cloud voice working!
+                    </div>
+
+                    <div class="error-box" id="googleErrorBox">
+                        ❌ Error: <span id="googleErrorMessage"></span>
+                    </div>
+                </div>
+            </div>
+
+            <button class="button button-primary" onclick="startApp()">
+                🚀 START WASTING THEIR TIME
+            </button>
+        </div>
+
+        <!-- Call Screen -->
+        <div class="call-screen" id="callScreen">
+            <div class="header">
+                <h1>📞 ACTIVE CALL</h1>
+                <p class="subtitle" id="activeVoiceSystem">iOS Voices</p>
+            </div>
+
+            <div class="setup-section">
+                <h2>🎭 Select Persona</h2>
+                
+                <div class="persona-grid">
+                    <div class="persona-card selected" data-persona="confused-grandpa">
+                        <div class="emoji">👴</div>
+                        <div class="name">Confused Grandpa</div>
+                    </div>
+                    <div class="persona-card" data-persona="paranoid-karen">
+                        <div class="emoji">🔍</div>
+                        <div class="name">Paranoid Karen</div>
+                    </div>
+                    <div class="persona-card" data-persona="drunk-dave">
+                        <div class="emoji">🍺</div>
+                        <div class="name">Drunk Dave</div>
+                    </div>
+                    <div class="persona-card" data-persona="foreign-investor">
+                        <div class="emoji">💰</div>
+                        <div class="name">Foreign Investor</div>
+                    </div>
+                    <div class="persona-card" data-persona="wannabe-hacker">
+                        <div class="emoji">💻</div>
+                        <div class="name">Wannabe Hacker</div>
+                    </div>
+                    <div class="persona-card" data-persona="chatty-housewife">
+                        <div class="emoji">☕</div>
+                        <div class="name">Chatty Housewife</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-indicator" id="statusIndicator"></div>
+
+            <div class="stats-row">
+                <div class="stat">
+                    <div class="stat-value" id="callDuration">0:00</div>
+                    <div class="stat-label">Duration</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="exchangeCount">0</div>
+                    <div class="stat-label">Exchanges</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="rageLevel">😐</div>
+                    <div class="stat-label">Scammer Rage</div>
+                </div>
+            </div>
+
+            <div class="transcript" id="transcript">
+                <div class="transcript-message system">
+                    <div class="message-label">SYSTEM</div>
+                    <div>🤖 AI-powered responses ready. Type what the scammer says below.</div>
+                </div>
+            </div>
+
+            <div class="input-row">
+                <input type="text" id="scammerInput" placeholder="What did the scammer say?">
+                <button class="button button-primary" onclick="processScammerMessage()">SEND</button>
+            </div>
+
+            <button class="button button-secondary" onclick="startListening()" id="listenBtn">
+                🎤 START VOICE MODE
+            </button>
+
+            <button class="button" style="background: var(--accent-red); color: white;" onclick="endCall()">
+                ❌ END CALL
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Persona system prompts
+        const personaPrompts = {
+            'confused-grandpa': `You are roleplaying as a confused, elderly grandpa (age 82) who is terrible with technology. Be hard of hearing, easily distracted, and very patient but confused. Waste the scammer's time by asking them to repeat things, getting distracted, pretending to comply but taking forever, mixing up technical terms. 
+
+CRITICAL FORMATTING RULES:
+1. Your ENTIRE response must be wrapped in <speak></speak> tags
+2. NO text before <speak> or after </speak>
+3. Use ONLY these SSML tags: <break time="Xms"/>, <emphasis level="strong">word</emphasis>, <prosody rate="slow">text</prosody>
+4. Close ALL tags properly
+5. NO asterisks or stage directions
+
+Example response format:
+<speak>What? <break time="800ms"/> Can you <emphasis level="strong">speak up</emphasis>? <break time="500ms"/> I can't hear you very well, dear.</speak>`,
+
+            'paranoid-karen': `You are roleplaying as an extremely paranoid, suspicious middle-aged woman who questions everything. Be intelligent, assertive, and immediately suspect this is a scam. Waste time by demanding verification (IDs, company registration), threatening to report to authorities, recording the call, demanding callbacks.
+
+CRITICAL FORMATTING RULES:
+1. Your ENTIRE response must be wrapped in <speak></speak> tags
+2. NO text before <speak> or after </speak>
+3. Use ONLY: <emphasis level="strong">word</emphasis>, <break time="Xms"/>, <prosody rate="fast" pitch="+2st">text</prosody>
+4. Close ALL tags properly
+5. Keep responses sharp, 1-2 sentences
+
+Example: <speak><emphasis level="strong">Excuse me?</emphasis> <break time="400ms"/> I want your employee ID number <emphasis level="strong">right now</emphasis>.</speak>`,
+
+            'drunk-dave': `You are roleplaying as a drunk middle-aged man. Slur your speech, ramble, get emotional, barely coherent. Waste time by rambling about random stories, getting emotional, losing track of conversation, mishearing things. Use "man", "dude", "buddy".
+
+CRITICAL FORMATTING RULES:
+1. Your ENTIRE response must be wrapped in <speak></speak> tags
+2. NO text before <speak> or after </speak>
+3. Use ONLY: <break time="Xms"/>, <prosody rate="slow" pitch="-1st">text</prosody>, <emphasis>word</emphasis>
+4. Close ALL tags properly
+
+Example: <speak>Duuude... <break time="1200ms"/> <prosody rate="slow">you ever think about like</prosody>... <break time="800ms"/> man I forgot what I was gonna say.</speak>`,
+
+            'foreign-investor': `You are roleplaying as a wealthy foreign investor with imperfect English. Be very interested but ask extremely detailed questions about regulations, taxes, legal structure. Waste time by acting interested with "substantial capital", asking complex financial questions, requesting documentation, mentioning advisors.
+
+CRITICAL FORMATTING RULES:
+1. Your ENTIRE response must be wrapped in <speak></speak> tags
+2. NO text before <speak> or after </speak>
+3. Use ONLY: <break time="Xms"/>, <emphasis level="moderate">word</emphasis>, <prosody rate="95%">text</prosody>
+4. Close ALL tags properly
+
+Example: <speak><prosody rate="95%">Yes, very interesting.</prosody> <break time="500ms"/> But I must understand <emphasis level="moderate">regulatory framework</emphasis>.</speak>`,
+
+            'wannabe-hacker': `You are roleplaying as a wannabe hacker who thinks they're very smart. Use technical jargon, claim to be analyzing their systems, try to "reverse engineer" what they're doing. Waste time with technical terms (Kali Linux, port scanning, SSL certificates, encryption).
+
+CRITICAL FORMATTING RULES:
+1. Your ENTIRE response must be wrapped in <speak></speak> tags
+2. NO text before <speak> or after </speak>
+3. Use ONLY: <emphasis level="strong">term</emphasis>, <break time="Xms"/>, <prosody rate="fast" pitch="+1st">text</prosody>
+4. Close ALL tags properly
+
+Example: <speak><prosody rate="fast">Hold on</prosody>, <break time="400ms"/> I'm running <emphasis level="strong">Wireshark</emphasis> right now.</speak>`,
+
+            'chatty-housewife': `You are roleplaying as a very chatty, friendly middle-aged housewife who won't stop talking about random life details. Waste time by going off on tangents about neighbors, pets, recipes, kids, asking personal questions, telling long pointless stories.
+
+CRITICAL FORMATTING RULES:
+1. Your ENTIRE response must be wrapped in <speak></speak> tags
+2. NO text before <speak> or after </speak>
+3. Use ONLY: <break time="Xms"/>, <emphasis>word</emphasis>, <prosody rate="110%" pitch="+1st">text</prosody>
+4. Close ALL tags properly
+
+Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="300ms"/> My neighbor Susan, <emphasis>such a sweet lady</emphasis>, was just telling me about her cat.</speak>`
+        };
+
+        // State
+        let voiceSystem = localStorage.getItem('scamtrap_voice_system') || 'ios';
+        let googleVoiceType = localStorage.getItem('scamtrap_google_voice') || 'en-US-Neural2-D';
+        let currentPersona = 'confused-grandpa';
+        let conversationHistory = [];
+        let callStartTime = null;
+        let exchangeCount = 0;
+        let timerInterval = null;
+        let isListening = false;
+        let recognition = null;
+        let synth = window.speechSynthesis;
+        let iosVoices = [];
+        
+        // Voice mapping for personas
+        let personaVoiceMap = {
+            'confused-grandpa': localStorage.getItem('voice_grandpa') || 'en-US-Neural2-D',
+            'paranoid-karen': localStorage.getItem('voice_karen') || 'en-US-Neural2-H',
+            'drunk-dave': localStorage.getItem('voice_dave') || 'en-US-Neural2-J',
+            'foreign-investor': localStorage.getItem('voice_investor') || 'en-IN-Neural2-B',
+            'wannabe-hacker': localStorage.getItem('voice_hacker') || 'en-US-Neural2-I',
+            'chatty-housewife': localStorage.getItem('voice_housewife') || 'en-US-Neural2-F'
+        };
+
+        // Initialize
+        initVoices();
+        selectVoiceSystem(voiceSystem);
+        initSpeechRecognition();
+        populatePersonaVoiceSelects();
+
+        function populatePersonaVoiceSelects() {
+            const voiceOptionsHTML = document.getElementById('googleVoiceType').innerHTML;
+            
+            document.getElementById('voiceGrandpa').innerHTML = voiceOptionsHTML;
+            document.getElementById('voiceKaren').innerHTML = voiceOptionsHTML;
+            document.getElementById('voiceDave').innerHTML = voiceOptionsHTML;
+            document.getElementById('voiceInvestor').innerHTML = voiceOptionsHTML;
+            document.getElementById('voiceHacker').innerHTML = voiceOptionsHTML;
+            document.getElementById('voiceHousewife').innerHTML = voiceOptionsHTML;
+            
+            // Set saved values
+            document.getElementById('voiceGrandpa').value = personaVoiceMap['confused-grandpa'];
+            document.getElementById('voiceKaren').value = personaVoiceMap['paranoid-karen'];
+            document.getElementById('voiceDave').value = personaVoiceMap['drunk-dave'];
+            document.getElementById('voiceInvestor').value = personaVoiceMap['foreign-investor'];
+            document.getElementById('voiceHacker').value = personaVoiceMap['wannabe-hacker'];
+            document.getElementById('voiceHousewife').value = personaVoiceMap['chatty-housewife'];
+        }
+
+        function toggleVoiceMapping() {
+            const section = document.getElementById('voiceMappingSection');
+            if (section.classList.contains('show')) {
+                section.classList.remove('show');
+            } else {
+                section.classList.add('show');
+            }
+        }
+
+        function saveVoiceMapping() {
+            personaVoiceMap['confused-grandpa'] = document.getElementById('voiceGrandpa').value;
+            personaVoiceMap['paranoid-karen'] = document.getElementById('voiceKaren').value;
+            personaVoiceMap['drunk-dave'] = document.getElementById('voiceDave').value;
+            personaVoiceMap['foreign-investor'] = document.getElementById('voiceInvestor').value;
+            personaVoiceMap['wannabe-hacker'] = document.getElementById('voiceHacker').value;
+            personaVoiceMap['chatty-housewife'] = document.getElementById('voiceHousewife').value;
+            
+            // Save to localStorage
+            localStorage.setItem('voice_grandpa', personaVoiceMap['confused-grandpa']);
+            localStorage.setItem('voice_karen', personaVoiceMap['paranoid-karen']);
+            localStorage.setItem('voice_dave', personaVoiceMap['drunk-dave']);
+            localStorage.setItem('voice_investor', personaVoiceMap['foreign-investor']);
+            localStorage.setItem('voice_hacker', personaVoiceMap['wannabe-hacker']);
+            localStorage.setItem('voice_housewife', personaVoiceMap['chatty-housewife']);
+            
+            showSuccess('voiceMappingSuccessBox');
+        }
+
+        async function testSpecificPersonaVoice(selectId, personaName) {
+            const voiceId = document.getElementById(selectId).value;
             const testText = `Hello, this is ${personaName}. This is how I'll sound when talking to scammers.`;
             
             try {
@@ -1377,3 +2785,4 @@ Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="
     </script>
 </body>
 </html>
+
