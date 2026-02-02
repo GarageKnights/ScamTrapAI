@@ -28,10 +28,11 @@ export default async function handler(req, res) {
           },
           audioConfig: {
             audioEncoding: 'MP3',
-            effectsProfileId: ['telephony-class-application'],
-            speakingRate: 0.96,
+            // Slightly more natural cadence + phone-call texture
+            speakingRate: 0.98,
             pitch: 0.0,
-            volumeGainDb: 0.0
+            volumeGainDb: 0.0,
+            effectsProfileId: ['telephony-class-application']
           }
         })
       }
