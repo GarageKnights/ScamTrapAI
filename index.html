@@ -804,69 +804,85 @@
     <script>
         // Persona system prompts
         const personaPrompts = {
-            'confused-grandpa': `You are roleplaying as a confused, elderly grandpa (age 82) who is terrible with technology. Be hard of hearing, easily distracted, and very patient but confused. Waste the scammer's time by asking them to repeat things, getting distracted, pretending to comply but taking forever, mixing up technical terms. 
+            'confused-grandpa': `You are roleplaying as a confused, elderly grandpa (age 82) who is terrible with technology. Be hard of hearing, easily distracted, and very patient but confused. Waste the scammer's time by asking them to repeat things, getting distracted, pretending to comply but taking forever, mixing up technical terms. Keep responses 1-3 sentences max, natural and conversational.`,
 
-CRITICAL FORMATTING RULES:
-1. Your ENTIRE response must be wrapped in <speak></speak> tags
-2. NO text before <speak> or after </speak>
-3. Use ONLY these SSML tags: <break time="Xms"/>, <emphasis level="strong">word</emphasis>, <prosody rate="slow">text</prosody>
-4. Close ALL tags properly
-5. NO asterisks or stage directions
+            'paranoid-karen': `You are roleplaying as an extremely paranoid, suspicious middle-aged woman who questions everything. Be intelligent, assertive, and immediately suspect this is a scam. Waste time by demanding verification (IDs, company registration), threatening to report to authorities, recording the call, demanding callbacks. Keep responses 1-2 sentences, sharp and direct.`,
 
-Example response format:
-<speak>What? <break time="800ms"/> Can you <emphasis level="strong">speak up</emphasis>? <break time="500ms"/> I can't hear you very well, dear.</speak>`,
+            'drunk-dave': `You are roleplaying as a drunk middle-aged man. Slur your speech, ramble, get emotional, barely coherent. Waste time by rambling about random stories, getting emotional, losing track of conversation, mishearing things. Use "man", "dude", "buddy". Keep responses casual, somewhat incoherent.`,
 
-            'paranoid-karen': `You are roleplaying as an extremely paranoid, suspicious middle-aged woman who questions everything. Be intelligent, assertive, and immediately suspect this is a scam. Waste time by demanding verification (IDs, company registration), threatening to report to authorities, recording the call, demanding callbacks.
+            'foreign-investor': `You are roleplaying as a wealthy foreign investor with imperfect English. Be very interested but ask extremely detailed questions about regulations, taxes, legal structure. Waste time by acting interested with "substantial capital", asking complex financial questions, requesting documentation, mentioning advisors. Keep responses formal, business-like, 2-3 sentences.`,
 
-CRITICAL FORMATTING RULES:
-1. Your ENTIRE response must be wrapped in <speak></speak> tags
-2. NO text before <speak> or after </speak>
-3. Use ONLY: <emphasis level="strong">word</emphasis>, <break time="Xms"/>, <prosody rate="fast" pitch="+2st">text</prosody>
-4. Close ALL tags properly
-5. Keep responses sharp, 1-2 sentences
+            'wannabe-hacker': `You are roleplaying as a wannabe hacker who thinks they're very smart. Use technical jargon, claim to be analyzing their systems, try to "reverse engineer" what they're doing. Waste time with technical terms (Kali Linux, port scanning, SSL certificates, encryption). Keep responses technical, confident, 1-2 sentences.`,
 
-Example: <speak><emphasis level="strong">Excuse me?</emphasis> <break time="400ms"/> I want your employee ID number <emphasis level="strong">right now</emphasis>.</speak>`,
-
-            'drunk-dave': `You are roleplaying as a drunk middle-aged man. Slur your speech, ramble, get emotional, barely coherent. Waste time by rambling about random stories, getting emotional, losing track of conversation, mishearing things. Use "man", "dude", "buddy".
-
-CRITICAL FORMATTING RULES:
-1. Your ENTIRE response must be wrapped in <speak></speak> tags
-2. NO text before <speak> or after </speak>
-3. Use ONLY: <break time="Xms"/>, <prosody rate="slow" pitch="-1st">text</prosody>, <emphasis>word</emphasis>
-4. Close ALL tags properly
-
-Example: <speak>Duuude... <break time="1200ms"/> <prosody rate="slow">you ever think about like</prosody>... <break time="800ms"/> man I forgot what I was gonna say.</speak>`,
-
-            'foreign-investor': `You are roleplaying as a wealthy foreign investor with imperfect English. Be very interested but ask extremely detailed questions about regulations, taxes, legal structure. Waste time by acting interested with "substantial capital", asking complex financial questions, requesting documentation, mentioning advisors.
-
-CRITICAL FORMATTING RULES:
-1. Your ENTIRE response must be wrapped in <speak></speak> tags
-2. NO text before <speak> or after </speak>
-3. Use ONLY: <break time="Xms"/>, <emphasis level="moderate">word</emphasis>, <prosody rate="95%">text</prosody>
-4. Close ALL tags properly
-
-Example: <speak><prosody rate="95%">Yes, very interesting.</prosody> <break time="500ms"/> But I must understand <emphasis level="moderate">regulatory framework</emphasis>.</speak>`,
-
-            'wannabe-hacker': `You are roleplaying as a wannabe hacker who thinks they're very smart. Use technical jargon, claim to be analyzing their systems, try to "reverse engineer" what they're doing. Waste time with technical terms (Kali Linux, port scanning, SSL certificates, encryption).
-
-CRITICAL FORMATTING RULES:
-1. Your ENTIRE response must be wrapped in <speak></speak> tags
-2. NO text before <speak> or after </speak>
-3. Use ONLY: <emphasis level="strong">term</emphasis>, <break time="Xms"/>, <prosody rate="fast" pitch="+1st">text</prosody>
-4. Close ALL tags properly
-
-Example: <speak><prosody rate="fast">Hold on</prosody>, <break time="400ms"/> I'm running <emphasis level="strong">Wireshark</emphasis> right now.</speak>`,
-
-            'chatty-housewife': `You are roleplaying as a very chatty, friendly middle-aged housewife who won't stop talking about random life details. Waste time by going off on tangents about neighbors, pets, recipes, kids, asking personal questions, telling long pointless stories.
-
-CRITICAL FORMATTING RULES:
-1. Your ENTIRE response must be wrapped in <speak></speak> tags
-2. NO text before <speak> or after </speak>
-3. Use ONLY: <break time="Xms"/>, <emphasis>word</emphasis>, <prosody rate="110%" pitch="+1st">text</prosody>
-4. Close ALL tags properly
-
-Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="300ms"/> My neighbor Susan, <emphasis>such a sweet lady</emphasis>, was just telling me about her cat.</speak>`
+            'chatty-housewife': `You are roleplaying as a very chatty, friendly middle-aged housewife who won't stop talking about random life details. Waste time by going off on tangents about neighbors, pets, recipes, kids, asking personal questions, telling long pointless stories. Keep responses conversational, friendly, rambling.`
         };
+
+        
+
+        // --- Speech hygiene + SSML (no UI/feature changes) ---
+        function sanitizeForSpeech(text) {
+            if (!text) return "";
+
+            // Remove *stage directions* that contain letters (keeps things like *69* intact)
+            let t = text.replace(/\*[^*]*[A-Za-z][^*]*\*/g, " ");
+
+            // Remove [stage directions]
+            t = t.replace(/\[[^\]]*\]/g, " ");
+
+            // Remove (stage directions) only when it looks like an action cue
+            t = t.replace(/\(([^)]*)\)/g, (m, inner) => {
+                const s = String(inner || "").trim().toLowerCase();
+                const looksLikeAction =
+                    /^(chuckle|chuckles|laugh|laughs|sigh|sighs|cough|coughs|clears throat|pause|pauses|breath|breathes|sniff|sniffs|groan|groans|mumble|mumbles)\b/.test(s);
+                return looksLikeAction ? " " : m;
+            });
+
+            return t.replace(/\s{2,}/g, " ").trim();
+        }
+
+        function escapeForSSML(text) {
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&apos;");
+        }
+
+        function ssmlForPersona(cleanText, persona) {
+            // Persona-tuned prosody (rendering only)
+            let rate = "medium";
+            let pitch = "0st";
+            let volume = "medium";
+
+            if (persona === "confused-grandpa") { rate = "slow"; pitch = "-2st"; volume = "soft"; }
+            if (persona === "paranoid-karen")   { rate = "fast"; pitch = "+1st"; }
+            if (persona === "drunk-dave")       { rate = "slow"; pitch = "-1st"; }
+
+            let t = escapeForSSML(cleanText);
+
+            // --- Natural cadence rules (no new words added) ---
+            // Ellipses -> real pause
+            t = t.replace(/\.{3,}/g, '<break time="500ms"/>');
+
+            // Small pause after common conversational openers
+            t = t.replace(/\b(Well|Okay|So|Look|Listen|Wait)\b,\s*/g, '$1, <break time="250ms"/>');
+
+            // Commas -> short pauses (avoid doubling if a break already follows)
+            t = t.replace(/,\s*(?!<break)/g, ', <break time="180ms"/> ');
+
+            // Sentence ends -> medium pauses
+            t = t.replace(/([.!?])\s+/g, '$1 <break time="320ms"/> ');
+
+            // Semicolons/colons -> light pause
+            t = t.replace(/([;:])\s+/g, '$1 <break time="220ms"/> ');
+
+            // Collapse repeated breaks
+            t = t.replace(/(<break[^>]*>)(\s*<break[^>]*>)+/g, '$1');
+
+            return `<speak><prosody rate="${rate}" pitch="${pitch}" volume="${volume}">${t}</prosody></speak>`;
+        }
+
 
         // State
         let voiceSystem = localStorage.getItem('scamtrap_voice_system') || 'ios';
@@ -946,24 +962,7 @@ Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="
 
         async function testSpecificPersonaVoice(selectId, personaName) {
             const voiceId = document.getElementById(selectId).value;
-            
-            // Different test text with SSML for each persona
-            let testText;
-            if (personaName.includes('Grandpa')) {
-                testText = `<speak>What? <break time="800ms"/> Can you <emphasis level="strong">speak up</emphasis>? <break time="500ms"/> <prosody rate="slow">I can't hear you very well, dear.</prosody></speak>`;
-            } else if (personaName.includes('Karen')) {
-                testText = `<speak><emphasis level="strong">Excuse me?</emphasis> <break time="400ms"/> <prosody rate="fast" pitch="+2st">I want your employee ID number</prosody> <emphasis level="strong">right now</emphasis>.</speak>`;
-            } else if (personaName.includes('Dave')) {
-                testText = `<speak>Duuude... <break time="1200ms"/> <prosody rate="slow" pitch="-1st">you ever think about like</prosody>... <break time="800ms"/> man I forgot what I was gonna say.</speak>`;
-            } else if (personaName.includes('Investor')) {
-                testText = `<speak><prosody rate="95%">Yes, very interesting opportunity.</prosody> <break time="500ms"/> But I must understand <emphasis level="moderate">regulatory framework</emphasis>.</speak>`;
-            } else if (personaName.includes('Hacker')) {
-                testText = `<speak><prosody rate="fast" pitch="+1st">Hold on</prosody>, <break time="400ms"/> I'm running <emphasis level="strong">Wireshark</emphasis> right now.</speak>`;
-            } else if (personaName.includes('Housewife')) {
-                testText = `<speak><prosody rate="110%" pitch="+1st">Oh that reminds me!</prosody> <break time="300ms"/> My neighbor Susan, <emphasis>such a sweet lady</emphasis>.</speak>`;
-            } else {
-                testText = `<speak>Hello, <break time="500ms"/> this is ${personaName}. <emphasis>This is how I'll sound</emphasis> when talking to scammers.</speak>`;
-            }
+            const testText = `Hello, this is ${personaName}. This is how I'll sound when talking to scammers.`;
             
             try {
                 await speakWithGoogleVoice(testText, voiceId);
@@ -1047,7 +1046,7 @@ Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="
         }
 
         async function testGoogleVoice() {
-            const testText = "<speak>Hello! <break time=\"600ms\"/> This is a test of the Google Cloud voice system. <break time=\"400ms\"/> <prosody rate=\"slow\">I'm a confused elderly grandpa</prosody> <break time=\"500ms\"/> who's <emphasis level=\"strong\">terrible</emphasis> with technology.</speak>";
+            const testText = "Hello! This is a test of the Google Cloud voice system. I'm a confused elderly grandpa who's terrible with technology.";
             const voiceId = document.getElementById('googleVoiceType').value;
             
             try {
@@ -1125,34 +1124,15 @@ Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="
         async function speakWithGoogle(text) {
             // Get the voice for the current persona
             const voiceId = personaVoiceMap[currentPersona] || googleVoiceType;
-            
-            // Sanitize: remove stage directions like *chuckles*, *sighs*, etc.
-            let sanitized = text.replace(/\*[^*]+\*/g, '');
-            
-            // Remove any non-SSML content before/after <speak> tags
-            if (sanitized.includes('<speak>')) {
-                const speakMatch = sanitized.match(/<speak>[\s\S]*?<\/speak>/);
-                if (speakMatch) {
-                    sanitized = speakMatch[0];
-                }
-            } else {
-                // If no SSML tags, wrap plain text in <speak> tags
-                sanitized = `<speak>${sanitized.trim()}</speak>`;
-            }
-            
-            // Validate: ensure no unclosed tags or invalid SSML
-            // Remove any text outside <speak> tags
-            sanitized = sanitized.replace(/^[^<]*<speak>/, '<speak>');
-            sanitized = sanitized.replace(/<\/speak>[^>]*$/, '</speak>');
-            
-            // Fix common SSML errors
-            sanitized = sanitized.replace(/<\/prosody>/g, '</prosody>');
-            sanitized = sanitized.replace(/<prosody([^>]*)><\/prosody>/g, ''); // Remove empty prosody tags
-            
-            return await speakWithGoogleVoice(sanitized, voiceId);
+
+            // Sanitize non-spoken stage directions and wrap in SSML for more natural cadence
+            const cleanText = sanitizeForSpeech(text);
+            const ssml = ssmlForPersona(cleanText, currentPersona);
+
+            return await speakWithGoogleVoice(ssml, voiceId, true);
         }
 
-        async function speakWithGoogleVoice(text, voiceId) {
+        async function speakWithGoogleVoice(text, voiceId, isSSML = false) {
             console.log('speakWithGoogleVoice called with:', text, voiceId);
             showStatus('🔊 Speaking...', 'speaking');
 
@@ -1161,55 +1141,21 @@ Example: <speak><prosody rate="110%">Oh that reminds me!</prosody> <break time="
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    text: text,
-                    voiceId: voiceId,
-                    useSSML: true
-                })
+                body: JSON.stringify({ text, voiceId, isSSML })
             });
 
             console.log('API response status:', response.status);
 
-            // If SSML fails, try again with plain text
             if (!response.ok) {
                 const error = await response.json();
-                console.error('SSML API error:', error);
-                
-                if (error.error && error.error.includes('SSML')) {
-                    console.log('SSML invalid, retrying with plain text');
-                    // Strip all SSML tags and try again
-                    const plainText = text.replace(/<[^>]+>/g, '').trim();
-                    
-                    const retryResponse = await fetch('/api/speak', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            text: plainText,
-                            voiceId: voiceId,
-                            useSSML: false
-                        })
-                    });
-                    
-                    if (!retryResponse.ok) {
-                        const retryError = await retryResponse.json();
-                        throw new Error(retryError.error || 'TTS failed');
-                    }
-                    
-                    const retryData = await retryResponse.json();
-                    return await playAudio(retryData.audioContent);
-                }
-                
+                console.error('API error:', error);
                 throw new Error(error.error || 'TTS failed');
             }
 
             const data = await response.json();
             console.log('Got audio data, length:', data.audioContent?.length);
-            return await playAudio(data.audioContent);
-        }
-        
-        async function playAudio(audioContent) {
+            const audioContent = data.audioContent;
+            
             // Decode base64 to array buffer
             const binaryString = atob(audioContent);
             const bytes = new Uint8Array(binaryString.length);
