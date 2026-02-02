@@ -7,40 +7,44 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { text, voiceId, useSSML } = req.body;
-    
-    if (!process.env.GOOGLE_CLOUD_API_KEY) {
-      return res.status(500).json({ error: 'Google Cloud API key not configured' });
-    }
-    
+    const { text, voiceId, isSSML } = req.body || {};
+
+    const rawText = typeof text === 'string' ? text : '';
+    if (!rawText.trim()) return res.status(400).json({ error: 'Missing text' });
+
+    const looksLikeSSML = Boolean(isSSML) || rawText.trim().startsWith('<speak');
+    const input = looksLikeSSML ? { ssml: rawText } : { text: rawText };
+
     const response = await fetch(
       `https://texttospeech.googleapis.com/v1/text:synthesize?key=${process.env.GOOGLE_CLOUD_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          input: useSSML ? { ssml: text } : { text },
-          voice: { languageCode: voiceId?.substring(0, 5) || 'en-US', name: voiceId || 'en-US-Neural2-D' },
-          audioConfig: { 
+          input,
+          voice: {
+            languageCode: voiceId?.substring(0, 5) || 'en-US',
+            name: voiceId || 'en-US-Neural2-D'
+          },
+          audioConfig: {
             audioEncoding: 'MP3',
-            pitch: 0,
-            speakingRate: 1.0
+            effectsProfileId: ['telephony-class-application'],
+            speakingRate: 0.96,
+            pitch: 0.0,
+            volumeGainDb: 0.0
           }
         })
       }
     );
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      return res.status(response.status).json({ error: errorData.error?.message || 'Google TTS API failed' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      const msg = data?.error?.message || data?.error || `TTS failed (${response.status})`;
+      return res.status(500).json({ error: msg });
     }
 
-    const data = await response.json();
-    
-    if (!data.audioContent) {
-      return res.status(500).json({ error: 'No audio content returned from Google' });
-    }
-    
+    if (!data?.audioContent) return res.status(500).json({ error: 'TTS did not return audioContent' });
+
     return res.status(200).json({ audioContent: data.audioContent });
   } catch (error) {
     return res.status(500).json({ error: error.message });
