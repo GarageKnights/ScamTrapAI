@@ -851,31 +851,100 @@
 
         function ssmlForPersona(cleanText, persona) {
             // Persona-tuned prosody (rendering only)
-            let rate = "medium";
+            // NOTE: Extreme "slow"/large pitch shifts can make Neural2 sound robotic.
+            // These settings aim for "human on a phone call" rather than narration.
+            let rate = "100%";
             let pitch = "0st";
             let volume = "medium";
 
-            if (persona === "confused-grandpa") { rate = "slow"; pitch = "-2st"; volume = "soft"; }
-            if (persona === "paranoid-karen")   { rate = "fast"; pitch = "+1st"; }
-            if (persona === "drunk-dave")       { rate = "slow"; pitch = "-1st"; }
+            // Persona-specific pause timings (ms)
+            let ellipsisPause = 320;
+            let openerPause = 220;
+            let commaPause = 160;
+            let sentencePause = 280;
+            let semiPause = 220;
+
+            if (persona === "confused-grandpa") {
+                rate = "92%";
+                pitch = "-0.5st";
+                volume = "medium";
+                ellipsisPause = 360;
+                openerPause = 240;
+                commaPause = 150;
+                sentencePause = 300;
+            }
+
+            if (persona === "paranoid-karen") {
+                // "fast" was way too aggressive; keep it snappy, not machine-gun.
+                rate = "104%";
+                pitch = "+0.5st";
+                volume = "medium";
+                ellipsisPause = 220;
+                openerPause = 140;
+                commaPause = 120;
+                sentencePause = 220;
+                semiPause = 180;
+            }
+
+            if (persona === "drunk-dave") {
+                // Avoid extreme slow + low pitch (robotic). Use slightly slower + stumble pauses.
+                rate = "88%";
+                pitch = "-0.2st";
+                volume = "medium";
+                ellipsisPause = 420;
+                openerPause = 240;
+                commaPause = 170;
+                sentencePause = 320;
+            }
+
+            if (persona === "foreign-investor") {
+                rate = "96%";
+                pitch = "0st";
+                volume = "medium";
+            }
+
+            if (persona === "wannabe-hacker") {
+                rate = "100%";
+                pitch = "-0.3st";
+                volume = "medium";
+                ellipsisPause = 260;
+                commaPause = 140;
+                sentencePause = 240;
+            }
+
+            if (persona === "chatty-housewife") {
+                // Keep warm + natural; extremes make it robotic.
+                rate = "98%";
+                pitch = "+0.6st";
+                volume = "medium";
+                ellipsisPause = 280;
+                openerPause = 220;
+                commaPause = 170;
+                sentencePause = 260;
+            }
 
             let t = escapeForSSML(cleanText);
 
             // --- Natural cadence rules (no new words added) ---
             // Ellipses -> real pause
-            t = t.replace(/\.{3,}/g, '<break time="500ms"/>');
+            t = t.replace(/\.{3,}/g, `<break time="${ellipsisPause}ms"/>`);
 
             // Small pause after common conversational openers
-            t = t.replace(/\b(Well|Okay|So|Look|Listen|Wait)\b,\s*/g, '$1, <break time="250ms"/>');
+            t = t.replace(/\b(Well|Okay|So|Look|Listen|Wait)\b,\s*/g, `$1, <break time="${openerPause}ms"/>`);
 
             // Commas -> short pauses (avoid doubling if a break already follows)
-            t = t.replace(/,\s*(?!<break)/g, ', <break time="180ms"/> ');
+            t = t.replace(/,\s*(?!<break)/g, `, <break time="${commaPause}ms"/> `);
 
             // Sentence ends -> medium pauses
-            t = t.replace(/([.!?])\s+/g, '$1 <break time="320ms"/> ');
+            t = t.replace(/([.!?])\s+/g, `$1 <break time="${sentencePause}ms"/> `);
 
             // Semicolons/colons -> light pause
-            t = t.replace(/([;:])\s+/g, '$1 <break time="220ms"/> ');
+            t = t.replace(/([;:])\s+/g, `$1 <break time="${semiPause}ms"/> `);
+
+            // Drunk Dave: add micro-stumbles after filler words (still no new words)
+            if (persona === "drunk-dave") {
+                t = t.replace(/\b(uh|um|yeah|yep|nope|man|dude|buddy)\b/gi, `$1 <break time="140ms"/>`);
+            }
 
             // Collapse repeated breaks
             t = t.replace(/(<break[^>]*>)(\s*<break[^>]*>)+/g, '$1');
